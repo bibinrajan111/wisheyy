@@ -7,13 +7,27 @@ class StorageService {
 
   final FirebaseStorage _storage;
 
+  Future<String> uploadWishAsset({
+    required String wishId,
+    required Uint8List file,
+    required String fileName,
+    String? contentType,
+  }) async {
+    final ref = _storage.ref('wishes/$wishId/$fileName');
+    await ref.putData(file, SettableMetadata(contentType: contentType));
+    return ref.getDownloadURL();
+  }
+
   Future<String> uploadWishImage({
     required String wishId,
     required Uint8List file,
     required int index,
-  }) async {
-    final ref = _storage.ref('wishes/$wishId/photo_$index.jpg');
-    await ref.putData(file);
-    return ref.getDownloadURL();
+  }) {
+    return uploadWishAsset(
+      wishId: wishId,
+      file: file,
+      fileName: 'photo_$index.jpg',
+      contentType: 'image/jpeg',
+    );
   }
 }
