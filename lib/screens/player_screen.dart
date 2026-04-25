@@ -54,7 +54,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _next() {
     final wish = _wish;
     if (wish == null) return;
-    if (_index < wish.messages.length - 1) {
+    final totalPages = wish.pages.isNotEmpty ? wish.pages.length : wish.messages.length;
+    if (_index < totalPages - 1) {
       setState(() {
         _holdReveal = false;
         _index++;
@@ -111,13 +112,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ),
             ),
           ),
-          ConfettiWidget(confettiController: _confetti, blastDirectionality: BlastDirectionality.explosive),
+          ConfettiWidget(
+            confettiController: _confetti,
+            blastDirectionality: BlastDirectionality.explosive,
+          ),
+          if (!wish.isPremium)
+            Positioned(
+              right: 12,
+              bottom: 12,
+              child: Opacity(
+                opacity: 0.8,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.35),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    child: Text('Created with Wisheyy'),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 
   Widget _buildSlide(WishModel wish) {
+    if (wish.pages.isNotEmpty) {
+      final page = wish.pages[_index.clamp(0, wish.pages.length - 1)];
+      return _buildPageSlide(page, wish);
+    }
+
     final message = wish.messages[_index];
     final showText = !wish.interactionConfig.holdEnabled || _holdReveal;
 
@@ -132,7 +159,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Image.network(wish.photos[_index % wish.photos.length], fit: BoxFit.cover),
+          if (wish.photos.isNotEmpty)
+            Image.network(wish.photos[_index % wish.photos.length], fit: BoxFit.cover),
           Container(color: Colors.black.withOpacity(0.35)),
           Padding(
             padding: const EdgeInsets.all(24),
@@ -156,5 +184,57 @@ class _PlayerScreenState extends State<PlayerScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildPageSlide(WishPageModel page, WishModel wish) {
+    final start = _parseHex(page.gradientStart, fallback: const Color(0xFF6E56F8));
+    final end = _parseHex(page.gradientEnd, fallback: Colors.black);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: page.backgroundType == WishBackgroundType.gradient
+                ? LinearGradient(colors: [start, end], begin: Alignment.topCenter, end: Alignment.bottomCenter)
+                : null,
+          ),
+          child: const SizedBox.expand(),
+        ),
+        if (page.backgroundType == WishBackgroundType.image && page.backgroundImageUrl != null)
+          Image.network(page.backgroundImageUrl!, fit: BoxFit.cover),
+        Container(color: Colors.black.withOpacity(0.25)),
+        ...page.components.map((component) {
+          final showText = !wish.interactionConfig.holdEnabled || _holdReveal;
+          return Positioned(
+            left: component.x,
+            top: component.y,
+            child: SizedBox(
+              width: component.width,
+              height: component.height,
+              child: switch (component.type) {
+                WishComponentType.text => AnimatedOpacity(
+                    opacity: showText ? 1 : 0,
+                    duration: const Duration(milliseconds: 300),
+                    child: Text(
+                      showText ? component.value : 'Hold to reveal…',
+                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white),
+                    ),
+                  ),
+                WishComponentType.image => component.value.startsWith('http')
+                    ? Image.network(component.value, fit: BoxFit.cover)
+                    : const SizedBox.shrink(),
+                WishComponentType.button => FilledButton(onPressed: () {}, child: Text(component.value)),
+              },
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Color _parseHex(String hex, {Color fallback = Colors.white}) {
+    final raw = hex.replaceAll('#', '').trim();
+    if (raw.length != 6) return fallback;
+    return Color(int.parse('0xFF$raw'));
   }
 }
