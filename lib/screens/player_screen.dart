@@ -271,4 +271,56 @@ class _HintChip extends StatelessWidget {
       child: Chip(label: Text(text, style: const TextStyle(fontSize: 12))),
     );
   }
+
+  Widget _buildPageSlide(WishPageModel page, WishModel wish) {
+    final start = _parseHex(page.gradientStart, fallback: const Color(0xFF6E56F8));
+    final end = _parseHex(page.gradientEnd, fallback: Colors.black);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: page.backgroundType == WishBackgroundType.gradient
+                ? LinearGradient(colors: [start, end], begin: Alignment.topCenter, end: Alignment.bottomCenter)
+                : null,
+          ),
+          child: const SizedBox.expand(),
+        ),
+        if (page.backgroundType == WishBackgroundType.image && page.backgroundImageUrl != null)
+          Image.network(page.backgroundImageUrl!, fit: BoxFit.cover),
+        Container(color: Colors.black.withOpacity(0.25)),
+        ...page.components.map((component) {
+          final showText = !wish.interactionConfig.holdEnabled || _holdReveal;
+          return Positioned(
+            left: component.x,
+            top: component.y,
+            child: SizedBox(
+              width: component.width,
+              height: component.height,
+              child: switch (component.type) {
+                WishComponentType.text => AnimatedOpacity(
+                    opacity: showText ? 1 : 0,
+                    duration: const Duration(milliseconds: 300),
+                    child: Text(
+                      showText ? component.value : 'Hold to reveal…',
+                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white),
+                    ),
+                  ),
+                WishComponentType.image => component.value.startsWith('http')
+                    ? Image.network(component.value, fit: BoxFit.cover)
+                    : const SizedBox.shrink(),
+                WishComponentType.button => FilledButton(onPressed: () {}, child: Text(component.value)),
+              },
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Color _parseHex(String hex, {Color fallback = Colors.white}) {
+    final raw = hex.replaceAll('#', '').trim();
+    if (raw.length != 6) return fallback;
+    return Color(int.parse('0xFF$raw'));
+  }
 }
