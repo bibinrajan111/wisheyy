@@ -133,7 +133,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         fit: StackFit.expand,
         children: [
           Image.network(wish.photos[_index % wish.photos.length], fit: BoxFit.cover),
-          Container(color: Colors.black.withValues(alpha: 0.35)),
+          Container(color: Colors.black.withOpacity(0.35)),
           Padding(
             padding: const EdgeInsets.all(24),
             child: Align(
