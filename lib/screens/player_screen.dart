@@ -27,6 +27,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   InteractionHandler? _interaction;
   int _index = 0;
   bool _holdReveal = false;
+  bool _swipeReveal = false;
+  bool _tapReveal = false;
+  bool _shakeReveal = false;
 
   @override
   void initState() {
@@ -39,36 +42,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _loadWish() async {
     final wish = await _repository.getWish(widget.wishId);
     _interaction = InteractionHandler(
-      onTap: _next,
-      onSwipeLeft: _next,
-      onSwipeRight: _previous,
+      onTap: () {
+        setState(() => _tapReveal = true);
+      },
+      onSwipeLeft: () {
+        setState(() => _swipeReveal = true);
+        _next();
+      },
+      onSwipeRight: () {
+        setState(() => _swipeReveal = true);
+        _previous();
+      },
       onLongPress: () => setState(() => _holdReveal = true),
-      onShake: _confetti.play,
+      onShake: () {
+        _confetti.play();
+        setState(() => _shakeReveal = true);
+      },
     )..startShakeListening();
 
-    if (mounted) {
-      setState(() => _wish = wish);
-    }
-  }
-
-  void _next() {
-    final wish = _wish;
-    if (wish == null) return;
-    if (_index < wish.messages.length - 1) {
-      setState(() {
-        _holdReveal = false;
-        _index++;
-      });
-    }
-  }
-
-  void _previous() {
-    if (_index > 0) {
-      setState(() {
-        _holdReveal = false;
-        _index--;
-      });
-    }
+    if (mounted) setState(() => _wish = wish);
   }
 
   @override
@@ -78,83 +70,202 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.dispose();
   }
 
+  void _next() {
+    final wish = _wish;
+    if (wish == null) return;
+    if (_index < wish.pages.length - 1) {
+      setState(() {
+        _index++;
+        _resetRevealStates();
+      });
+    }
+  }
+
+  void _previous() {
+    if (_index > 0) {
+      setState(() {
+        _index--;
+        _resetRevealStates();
+      });
+    }
+  }
+
+  void _resetRevealStates() {
+    _holdReveal = false;
+    _swipeReveal = false;
+    _tapReveal = false;
+    _shakeReveal = false;
+  }
+
+  void _runButton(ButtonActionType action) {
+    switch (action) {
+      case ButtonActionType.nextPage:
+        _next();
+        break;
+      case ButtonActionType.previousPage:
+        _previous();
+        break;
+      case ButtonActionType.toggleReveal:
+        setState(() => _tapReveal = !_tapReveal);
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final wish = _wish;
     if (wish == null) {
-      return const AdaptiveScaffold(
-        title: 'Loading Wish',
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const AdaptiveScaffold(title: 'Loading Wish', body: Center(child: CircularProgressIndicator()));
     }
+
+    if (wish.pages.isEmpty) {
+      return const AdaptiveScaffold(title: 'Wish Experience', body: Center(child: Text('No pages to display')));
+    }
+    final page = wish.pages[_index.clamp(0, wish.pages.length - 1)];
 
     return AdaptiveScaffold(
       title: 'Wish Experience',
       body: Stack(
-        alignment: Alignment.topCenter,
         children: [
-          GestureDetector(
-            onTap: wish.interactionConfig.tapEnabled ? _interaction?.onTap : null,
-            onHorizontalDragEnd: (details) {
-              if (!wish.interactionConfig.swipeEnabled) return;
-              if (details.velocity.pixelsPerSecond.dx < 0) {
-                _interaction?.onSwipeLeft?.call();
-              } else {
-                _interaction?.onSwipeRight?.call();
-              }
-            },
-            onLongPress: wish.interactionConfig.holdEnabled ? _interaction?.onLongPress : null,
-            child: SizedBox.expand(
-              child: StoryTransition(
-                animationType: wish.animationType,
-                child: _buildSlide(wish),
-              ),
-            ),
-          ),
-          ConfettiWidget(confettiController: _confetti, blastDirectionality: BlastDirectionality.explosive),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSlide(WishModel wish) {
-    final message = wish.messages[_index];
-    final showText = !wish.interactionConfig.holdEnabled || _holdReveal;
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(int.parse('0xFF${wish.theme.replaceAll('#', '')}')), Colors.black],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-      ),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Image.network(wish.photos[_index % wish.photos.length], fit: BoxFit.cover),
-          Container(color: Colors.black.withOpacity(0.35)),
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: AnimatedOpacity(
-                opacity: showText ? 1 : 0,
-                duration: const Duration(milliseconds: 300),
-                child: Text(
-                  showText ? message : 'Hold to reveal…',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 28,
-                    fontWeight: FontWeight.w700,
-                  ),
+          Center(
+            child: AspectRatio(
+              aspectRatio: 9 / 16,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 390, maxHeight: 700),
+                child: GestureDetector(
+                  onTap: _interaction?.onTap,
+                  onLongPress: _interaction?.onLongPress,
+                  onHorizontalDragEnd: (details) {
+                    if (details.velocity.pixelsPerSecond.dx < 0) {
+                      _interaction?.onSwipeLeft?.call();
+                    } else {
+                      _interaction?.onSwipeRight?.call();
+                    }
+                  },
+                  child: StoryTransition(animationType: wish.animationType, child: _buildPage(page)),
                 ),
               ),
             ),
           ),
+          ConfettiWidget(confettiController: _confetti, blastDirectionality: BlastDirectionality.explosive),
+          if (!wish.isPremium)
+            Positioned(
+              right: 12,
+              bottom: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: Colors.black.withOpacity(0.45), borderRadius: BorderRadius.circular(8)),
+                child: const Text('Created with Wisheyy'),
+              ),
+            ),
         ],
       ),
     );
   }
+
+  Widget _buildPage(WishPageModel page) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _background(page),
+        _finishOverlay(page.finish),
+        ...page.components.map((c) {
+          final visible = _isVisible(c);
+          if (!visible) return const SizedBox.shrink();
+          return Positioned(
+            left: c.x,
+            top: c.y,
+            child: SizedBox(
+              width: c.width,
+              height: c.height,
+              child: switch (c.type) {
+                WishComponentType.text => Text(
+                    c.value,
+                    style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
+                  ),
+                WishComponentType.image => c.value.startsWith('http') ? Image.network(c.value, fit: BoxFit.cover) : const SizedBox.shrink(),
+                WishComponentType.button => FilledButton.icon(
+                    onPressed: () => _runButton(c.actionType),
+                    icon: Icon(_triggerIcon(c.revealTrigger), size: 16),
+                    label: Text(c.value),
+                  ),
+              },
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  bool _isVisible(WishComponentModel c) {
+    switch (c.revealTrigger) {
+      case RevealTrigger.none:
+        return true;
+      case RevealTrigger.tap:
+        return _tapReveal;
+      case RevealTrigger.hold:
+        return _holdReveal;
+      case RevealTrigger.swipe:
+        return _swipeReveal;
+      case RevealTrigger.shake:
+        return _shakeReveal;
+    }
+  }
+
+  IconData _triggerIcon(RevealTrigger t) {
+    switch (t) {
+      case RevealTrigger.none:
+        return Icons.smart_button;
+      case RevealTrigger.tap:
+        return Icons.touch_app;
+      case RevealTrigger.hold:
+        return Icons.pan_tool_alt;
+      case RevealTrigger.swipe:
+        return Icons.swipe;
+      case RevealTrigger.shake:
+        return Icons.vibration;
+    }
+  }
+
+  Widget _background(WishPageModel page) {
+    switch (page.backgroundType) {
+      case WishBackgroundType.solid:
+        return ColoredBox(color: _hex(page.solidColor));
+      case WishBackgroundType.gradient:
+        return DecoratedBox(
+          decoration: BoxDecoration(gradient: LinearGradient(colors: [_hex(page.gradientStart), _hex(page.gradientEnd)])),
+        );
+      case WishBackgroundType.image:
+        if (page.backgroundImageUrl == null) return const ColoredBox(color: Colors.black12);
+        return Image.network(page.backgroundImageUrl!, fit: BoxFit.cover);
+      case WishBackgroundType.video:
+        return const Stack(
+          children: [
+            Positioned.fill(child: ColoredBox(color: Colors.black38)),
+            Center(child: Icon(Icons.play_circle_fill_rounded, size: 90, color: Colors.white70)),
+          ],
+        );
+    }
+  }
+
+  Widget _finishOverlay(FinishType finish) {
+    switch (finish) {
+      case FinishType.normal:
+        return const SizedBox.shrink();
+      case FinishType.matte:
+        return ColoredBox(color: Colors.black.withOpacity(0.16));
+      case FinishType.metallic:
+        return IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Colors.white.withOpacity(0.14), Colors.transparent, Colors.white.withOpacity(0.08)],
+              ),
+            ),
+          ),
+        );
+    }
+  }
+
+  Color _hex(String value) => Color(int.parse('0xFF${value.replaceAll('#', '')}'));
 }

@@ -1,5 +1,5 @@
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart';
+
 import 'package:firebase_storage/firebase_storage.dart';
 
 class StorageService {
@@ -7,19 +7,27 @@ class StorageService {
 
   final FirebaseStorage _storage;
 
+  Future<String> uploadWishAsset({
+    required String wishId,
+    required Uint8List file,
+    required String fileName,
+    String? contentType,
+  }) async {
+    final ref = _storage.ref('wishes/$wishId/$fileName');
+    await ref.putData(file, SettableMetadata(contentType: contentType));
+    return ref.getDownloadURL();
+  }
+
   Future<String> uploadWishImage({
     required String wishId,
-    required dynamic file, // File (mobile) OR Uint8List (web)
+    required Uint8List file,
     required int index,
-  }) async {
-    final ref = _storage.ref('wishes/$wishId/photo_$index.jpg');
-
-    if (kIsWeb) {
-      await ref.putData(file as Uint8List);
-    } else {
-      await ref.putFile(file);
-    }
-
-    return await ref.getDownloadURL();
+  }) {
+    return uploadWishAsset(
+      wishId: wishId,
+      file: file,
+      fileName: 'photo_$index.jpg',
+      contentType: 'image/jpeg',
+    );
   }
 }
