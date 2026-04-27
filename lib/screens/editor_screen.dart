@@ -493,7 +493,10 @@ class _EditorScreenState extends State<EditorScreen> {
                             items: ButtonActionType.values
                                 .map((e) => DropdownMenuItem(value: e, child: Text(e.name)))
                                 .toList(),
-                            onChanged: (v) => _updateSelected((x) => x.copyWith(actionType: v)),
+                            onChanged: (v) {
+                              if (v == null) return;
+                              _updateSelected((x) => x.copyWith(actionType: v));
+                            },
                             decoration: const InputDecoration(labelText: 'Button purpose'),
                           ),
                         SwitchListTile.adaptive(

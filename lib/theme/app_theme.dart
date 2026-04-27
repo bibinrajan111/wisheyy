@@ -8,7 +8,7 @@ class AppTheme {
     useMaterial3: true,
     textTheme: GoogleFonts.poppinsTextTheme(),
     scaffoldBackgroundColor: const Color(0xFF0F1024),
-    cardTheme: CardThemeData(
+    cardTheme: CardTheme(
       color: const Color(0xFF1D2040),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       elevation: 6,
