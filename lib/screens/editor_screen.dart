@@ -30,6 +30,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
   final _pages = <WishPageModel>[];
   final _picked = <XFile>[];
+  final _pages = <WishPageModel>[];
 
   int _currentPage = 0;
   String? _selectedId;
