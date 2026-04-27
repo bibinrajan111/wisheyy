@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
@@ -11,22 +13,7 @@ import '../services/storage_service.dart';
 import '../services/wish_repository.dart';
 import '../widgets/adaptive_scaffold.dart';
 
-const _palette = <Color>[
-  Color(0xFF6E56F8),
-  Color(0xFFF15F79),
-  Color(0xFF36D1DC),
-  Color(0xFF00C9A7),
-  Color(0xFF845EC2),
-  Color(0xFF1B1A55),
-  Color(0xFF111827),
-  Color(0xFFE11D48),
-  Color(0xFFF59E0B),
-  Color(0xFF22C55E),
-  Color(0xFF3B82F6),
-  Color(0xFF9333EA),
-];
-
-enum PreviewDevice { phone, tablet, desktop }
+enum PreviewDevice { mobile, tablet, desktop }
 
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.templateType});
@@ -39,518 +26,499 @@ class EditorScreen extends StatefulWidget {
 
 class _EditorScreenState extends State<EditorScreen> {
   final _picker = ImagePicker();
-  final _componentTextController = TextEditingController();
-  final _interactionTapController = TextEditingController(text: 'Tap to continue');
-  final _interactionSwipeController = TextEditingController(text: 'Swipe to navigate');
-  final _interactionHoldController = TextEditingController(text: 'Hold to reveal');
-  final _interactionShakeController = TextEditingController(text: 'Shake for surprise');
+  final _textController = TextEditingController();
 
+  final _pages = <WishPageModel>[];
   final _picked = <XFile>[];
   final _pages = <WishPageModel>[];
 
   int _currentPage = 0;
-  String? _selectedComponentId;
+  String? _selectedId;
   AnimationType _animationType = AnimationType.fade;
   bool _saving = false;
-  bool _tapEnabled = true;
-  bool _swipeEnabled = false;
-  bool _holdEnabled = false;
-  bool _shakeEnabled = false;
-  PreviewDevice _previewDevice = PreviewDevice.phone;
+  PreviewDevice _previewDevice = PreviewDevice.mobile;
+  bool _previewInitialized = false;
 
   @override
   void initState() {
     super.initState();
-    _pages.add(_defaultPageForTemplate(widget.templateType));
+    _pages.add(_seedPage(widget.templateType));
   }
 
-  WishPageModel _defaultPageForTemplate(TemplateType type) {
-    final theme = switch (type) {
-      TemplateType.romantic => (const Color(0xFFB24592), const Color(0xFFF15F79), 'My Love'),
-      TemplateType.birthday => (const Color(0xFF36D1DC), const Color(0xFF5B86E5), 'Happy Birthday!'),
-      TemplateType.friendship => (const Color(0xFF00C9A7), const Color(0xFF845EC2), 'To my best friend'),
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_previewInitialized) return;
+    _previewInitialized = true;
+    final width = MediaQuery.sizeOf(context).width;
+    _previewDevice = width < 700
+        ? PreviewDevice.mobile
+        : width < 1100
+            ? PreviewDevice.tablet
+            : PreviewDevice.desktop;
+  }
+
+  WishPageModel _seedPage(TemplateType type) {
+    final colors = switch (type) {
+      TemplateType.romantic => (const Color(0xFFB24592), const Color(0xFFF15F79), 'My Love Story'),
+      TemplateType.birthday => (const Color(0xFF36D1DC), const Color(0xFF5B86E5), 'Birthday Vibes'),
+      TemplateType.friendship => (const Color(0xFF00C9A7), const Color(0xFF845EC2), 'Friendship Forever'),
     };
+
     return WishPageModel(
       id: const Uuid().v4(),
       backgroundType: WishBackgroundType.gradient,
-      solidColor: _toHex(theme.$1),
-      gradientStart: _toHex(theme.$1),
-      gradientEnd: _toHex(theme.$2),
+      solidColor: _toHex(colors.$1),
+      gradientStart: _toHex(colors.$1),
+      gradientEnd: _toHex(colors.$2),
+      finish: FinishType.normal,
       components: [
         WishComponentModel(
           id: const Uuid().v4(),
           type: WishComponentType.text,
-          value: theme.$3,
+          value: colors.$3,
           x: 28,
-          y: 80,
+          y: 78,
           width: 280,
-          height: 80,
+          height: 64,
         ),
         WishComponentModel(
           id: const Uuid().v4(),
           type: WishComponentType.text,
-          value: 'A special message crafted with Wisheyy',
+          value: 'Edit me right on canvas ✨',
           x: 28,
-          y: 170,
+          y: 152,
           width: 300,
-          height: 100,
+          height: 84,
+          revealTrigger: RevealTrigger.tap,
         ),
         WishComponentModel(
           id: const Uuid().v4(),
           type: WishComponentType.button,
           value: 'Next',
+          x: 118,
+          y: 544,
+          width: 124,
+          height: 50,
           actionType: ButtonActionType.nextPage,
-          x: 110,
-          y: 525,
-          width: 140,
-          height: 52,
+          revealTrigger: RevealTrigger.tap,
         ),
       ],
     );
   }
 
+  WishPageModel get _page => _pages[_currentPage];
+
   void _addPage() {
     setState(() {
-      _pages.add(_defaultPageForTemplate(widget.templateType));
+      _pages.add(_seedPage(widget.templateType));
       _currentPage = _pages.length - 1;
-      _selectedComponentId = null;
+      _selectedId = null;
     });
   }
 
-  Future<void> _pickImage() async {
-    final image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
-    if (image == null) return;
-    setState(() => _picked.add(image));
-  }
-
-  Future<void> _pickVideoForBackground() async {
-    final video = await _picker.pickVideo(source: ImageSource.gallery);
-    if (video == null) return;
-    setState(() => _picked.add(video));
-    final page = _pages[_currentPage];
+  Future<void> _pickBackgroundAsset({required bool video}) async {
+    final file = video
+        ? await _picker.pickVideo(source: ImageSource.gallery)
+        : await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (file == null) return;
     setState(() {
-      _pages[_currentPage] = page.copyWith(
-        backgroundType: WishBackgroundType.video,
-        backgroundVideoUrl: video.path,
+      _picked.add(file);
+      _pages[_currentPage] = _page.copyWith(
+        backgroundType: video ? WishBackgroundType.video : WishBackgroundType.image,
+        backgroundImageUrl: video ? _page.backgroundImageUrl : file.path,
+        backgroundVideoUrl: video ? file.path : _page.backgroundVideoUrl,
       );
     });
   }
 
-  void _addComponent(WishComponentType type) {
-    final page = _pages[_currentPage];
-    final component = WishComponentModel(
-      id: const Uuid().v4(),
-      type: type,
-      value: switch (type) {
-        WishComponentType.text => _componentTextController.text.trim().isEmpty
-            ? 'Your text here'
-            : _componentTextController.text.trim(),
-        WishComponentType.image => _picked.isNotEmpty ? _picked.first.path : '',
-        WishComponentType.button => 'Next',
-      },
-      x: 40,
-      y: 120,
-      width: type == WishComponentType.image ? 180 : 220,
-      height: type == WishComponentType.image ? 140 : 60,
-      actionType: ButtonActionType.nextPage,
-    );
-
-    setState(() {
-      _pages[_currentPage] = page.copyWith(components: [...page.components, component]);
-      _selectedComponentId = component.id;
-    });
-  }
-
-  void _setColorOnPage({required bool isGradientStart, required bool isSolid}) async {
-    final selected = await showModalBottomSheet<Color>(
+  Future<RevealTrigger?> _askTrigger() async {
+    return showModalBottomSheet<RevealTrigger>(
       context: context,
       showDragHandle: true,
-      builder: (context) => _ColorPickerSheet(initial: _palette.first),
+      builder: (context) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const ListTile(title: Text('Choose reveal interaction')),
+              for (final trigger in RevealTrigger.values.where((e) => e != RevealTrigger.none))
+                ListTile(
+                  title: Text(trigger.name),
+                  subtitle: Text((trigger == RevealTrigger.tap)
+                      ? 'Free'
+                      : 'Premium component (recommended paid tier)'),
+                  onTap: () => Navigator.pop(context, trigger),
+                ),
+            ],
+          ),
+        );
+      },
     );
-    if (selected == null) return;
+  }
 
-    final page = _pages[_currentPage];
+  Future<ButtonActionType?> _askButtonPurpose() async {
+    return showModalBottomSheet<ButtonActionType>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('What should this button do?')),
+            for (final action in ButtonActionType.values)
+              ListTile(
+                title: Text(action.name),
+                onTap: () => Navigator.pop(context, action),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addComponent(WishComponentType type) async {
+    final trigger = await _askTrigger() ?? RevealTrigger.tap;
+    ButtonActionType action = ButtonActionType.nextPage;
+    if (type == WishComponentType.button) {
+      action = await _askButtonPurpose() ?? ButtonActionType.nextPage;
+    }
+
+    final value = switch (type) {
+      WishComponentType.text => _textController.text.trim().isEmpty ? 'Your text' : _textController.text.trim(),
+      WishComponentType.image => _picked.isNotEmpty ? _picked.first.path : '',
+      WishComponentType.button => 'Action',
+    };
+
+    final c = WishComponentModel(
+      id: const Uuid().v4(),
+      type: type,
+      value: value,
+      x: 40,
+      y: 130,
+      width: type == WishComponentType.image ? 170 : 220,
+      height: type == WishComponentType.image ? 130 : 60,
+      actionType: action,
+      revealTrigger: trigger,
+    );
+
     setState(() {
-      if (isSolid) {
-        _pages[_currentPage] = page.copyWith(solidColor: _toHex(selected));
-      } else if (isGradientStart) {
-        _pages[_currentPage] = page.copyWith(gradientStart: _toHex(selected));
-      } else {
-        _pages[_currentPage] = page.copyWith(gradientEnd: _toHex(selected));
-      }
+      _pages[_currentPage] = _page.copyWith(components: [..._page.components, c]);
+      _selectedId = c.id;
     });
   }
 
-  void _updateSelected(WishComponentModel Function(WishComponentModel c) map) {
-    final selectedId = _selectedComponentId;
-    if (selectedId == null) return;
-    final page = _pages[_currentPage];
-    final components = page.components.map((c) => c.id == selectedId ? map(c) : c).toList();
-    setState(() => _pages[_currentPage] = page.copyWith(components: components));
+  void _updateSelected(WishComponentModel Function(WishComponentModel) mapper) {
+    if (_selectedId == null) return;
+    final list = _page.components.map((c) => c.id == _selectedId ? mapper(c) : c).toList();
+    setState(() => _pages[_currentPage] = _page.copyWith(components: list));
+  }
+
+  Future<void> _chooseColor({required bool start, required bool solid}) async {
+    final c = await showModalBottomSheet<Color>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => _HsbPicker(initial: _hexColor(_page.gradientStart)),
+    );
+    if (c == null) return;
+    setState(() {
+      _pages[_currentPage] = _page.copyWith(
+        solidColor: solid ? _toHex(c) : _page.solidColor,
+        gradientStart: start ? _toHex(c) : _page.gradientStart,
+        gradientEnd: !start && !solid ? _toHex(c) : _page.gradientEnd,
+      );
+    });
+  }
+
+  Future<void> _editTextOnCanvas(WishComponentModel c) async {
+    if (c.type != WishComponentType.text && c.type != WishComponentType.button) return;
+    final ctrl = TextEditingController(text: c.value);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Edit text'),
+        content: TextField(controller: ctrl, autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (result == null || result.isEmpty) return;
+    _updateSelected((x) => x.copyWith(value: result));
   }
 
   Future<void> _saveWish() async {
-    if (_pages.isEmpty) return;
     if (_pages.every((p) => p.components.isEmpty)) {
-      _showMessage('Please add at least one component.');
+      _snack('Add at least one component.');
       return;
     }
 
     setState(() => _saving = true);
-
     try {
       final id = const Uuid().v4();
       final storage = StorageService(FirebaseStorage.instance);
-      final repository = WishRepository(FirebaseFirestore.instance);
-      final uploadedByPath = <String, String>{};
-      final photos = <String>[];
+      final repo = WishRepository(FirebaseFirestore.instance);
+      final urlByPath = <String, String>{};
 
       for (var i = 0; i < _picked.length; i++) {
         final file = _picked[i];
-        final bytes = await file.readAsBytes();
         final isVideo = file.path.toLowerCase().endsWith('.mp4') || file.path.toLowerCase().endsWith('.mov');
         final url = await storage.uploadWishAsset(
           wishId: id,
-          file: bytes,
+          file: await file.readAsBytes(),
           fileName: '${isVideo ? 'video' : 'asset'}_$i${isVideo ? '.mp4' : '.jpg'}',
           contentType: isVideo ? 'video/mp4' : 'image/jpeg',
         );
-        uploadedByPath[file.path] = url;
-        if (!isVideo) photos.add(url);
+        urlByPath[file.path] = url;
       }
 
-      final mappedPages = _pages.map((page) {
-        final components = page.components.map((c) {
-          if (c.type == WishComponentType.image && uploadedByPath.containsKey(c.value)) {
-            return c.copyWith(value: uploadedByPath[c.value]);
+      final pages = _pages.map((p) {
+        final components = p.components.map((c) {
+          if (c.type == WishComponentType.image && urlByPath.containsKey(c.value)) {
+            return c.copyWith(value: urlByPath[c.value]);
           }
           return c;
         }).toList();
-        return page.copyWith(
-          backgroundImageUrl: uploadedByPath[page.backgroundImageUrl] ?? page.backgroundImageUrl,
-          backgroundVideoUrl: uploadedByPath[page.backgroundVideoUrl] ?? page.backgroundVideoUrl,
+        return p.copyWith(
+          backgroundImageUrl: urlByPath[p.backgroundImageUrl] ?? p.backgroundImageUrl,
+          backgroundVideoUrl: urlByPath[p.backgroundVideoUrl] ?? p.backgroundVideoUrl,
           components: components,
         );
       }).toList();
 
-      final isPremium = _holdEnabled || _shakeEnabled || _swipeEnabled ||
-          mappedPages.any((p) => p.backgroundType == WishBackgroundType.video);
+      final premiumFromTriggers = pages.any(
+        (p) => p.components.any((c) =>
+            c.revealTrigger == RevealTrigger.swipe ||
+            c.revealTrigger == RevealTrigger.hold ||
+            c.revealTrigger == RevealTrigger.shake),
+      );
+      final premiumFromVideo = pages.any((p) => p.backgroundType == WishBackgroundType.video);
+      final isPremium = premiumFromTriggers || premiumFromVideo;
 
       final wish = WishModel(
         id: id,
         templateType: widget.templateType,
-        photos: photos,
-        messages: mappedPages
-            .map((p) => p.components.where((c) => c.type == WishComponentType.text).map((e) => e.value).join(' '))
-            .where((text) => text.trim().isNotEmpty)
+        photos: pages
+            .expand((p) => p.components.where((c) => c.type == WishComponentType.image).map((c) => c.value))
+            .where((v) => v.startsWith('http'))
             .toList(),
-        theme: mappedPages.first.solidColor,
+        messages: pages
+            .map((p) => p.components.where((c) => c.type == WishComponentType.text).map((c) => c.value).join(' '))
+            .toList(),
+        theme: pages.first.solidColor,
         animationType: _animationType,
         musicUrl: null,
-        interactionConfig: InteractionConfig(
-          tapEnabled: _tapEnabled,
-          swipeEnabled: _swipeEnabled,
-          holdEnabled: _holdEnabled,
-          shakeEnabled: _shakeEnabled,
-          tapLabel: _interactionTapController.text.trim(),
-          swipeLabel: _interactionSwipeController.text.trim(),
-          holdLabel: _interactionHoldController.text.trim(),
-          shakeLabel: _interactionShakeController.text.trim(),
+        interactionConfig: const InteractionConfig(
+          tapEnabled: true,
+          swipeEnabled: true,
+          holdEnabled: true,
+          shakeEnabled: true,
         ),
         createdAt: DateTime.now(),
-        pages: mappedPages,
+        pages: pages,
         isPremium: isPremium,
       );
 
-      await repository.saveWish(wish);
+      await repo.saveWish(wish);
       if (!mounted) return;
-      _showMessage('Ready to share: ${ShareService().buildWishUrl(id)}');
+      _snack('Ready to share: ${ShareService().buildWishUrl(id)}');
       context.go('/player/$id');
     } catch (_) {
-      _showMessage('Unable to create wish right now.');
+      _snack('Could not create wish right now.');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _snack(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 
   @override
   void dispose() {
-    _componentTextController.dispose();
-    _interactionTapController.dispose();
-    _interactionSwipeController.dispose();
-    _interactionHoldController.dispose();
-    _interactionShakeController.dispose();
+    _textController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final page = _pages[_currentPage];
+    final isMobile = MediaQuery.sizeOf(context).width < 980;
 
     return AdaptiveScaffold(
       title: 'Editor • ${widget.templateType.name}',
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final isMobile = constraints.maxWidth < 980;
-          final editorPanel = _buildEditorPanel(page);
-          final previewPanel = _buildPreviewPanel(page, constraints.maxWidth, isMobile);
-
-          if (isMobile) {
-            return ListView(
-              padding: const EdgeInsets.only(bottom: 40),
-              children: [
-                previewPanel,
-                editorPanel,
-              ],
-            );
-          }
-
-          return Row(
-            children: [
-              Expanded(flex: 5, child: editorPanel),
-              Expanded(flex: 4, child: previewPanel),
-            ],
-          );
-        },
-      ),
+      body: isMobile
+          ? ListView(children: [_previewCard(), _controlCard()])
+          : Row(children: [Expanded(flex: 4, child: _controlCard()), Expanded(flex: 3, child: _previewCard())]),
     );
   }
 
-  Widget _buildEditorPanel(WishPageModel page) {
+  Widget _controlCard() {
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Card(
         child: ListView(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(12),
           children: [
             ExpansionTile(
+              title: const Text('1) Preview device size'),
               initiallyExpanded: true,
-              title: const Text('Step 1: Pages & Flow'),
-              subtitle: const Text('Mobile-first storytelling flow'),
               children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: _addPage,
-                      icon: const Icon(Icons.add_box_outlined),
-                      label: const Text('Add Next Page'),
-                    ),
-                    ...List.generate(
-                      _pages.length,
-                      (index) => ChoiceChip(
-                        label: Text('Page ${index + 1}'),
-                        selected: _currentPage == index,
-                        onSelected: (_) => setState(() {
-                          _currentPage = index;
-                          _selectedComponentId = null;
-                        }),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                const ListTile(
-                  leading: Icon(Icons.lightbulb_outline),
-                  title: Text('Suggestion: Keep 3–5 pages for better completion rates.'),
-                ),
-              ],
-            ),
-            ExpansionTile(
-              initiallyExpanded: true,
-              title: const Text('Step 2: Choose Background'),
-              subtitle: const Text('Solid color, gradient, image, or premium video'),
-              children: [
-                SegmentedButton<WishBackgroundType>(
+                SegmentedButton<PreviewDevice>(
+                  selected: {_previewDevice},
                   segments: const [
-                    ButtonSegment(value: WishBackgroundType.solid, label: Text('Color')),
-                    ButtonSegment(value: WishBackgroundType.gradient, label: Text('Gradient')),
-                    ButtonSegment(value: WishBackgroundType.image, label: Text('Image')),
-                    ButtonSegment(value: WishBackgroundType.video, label: Text('Video 💎')),
+                    ButtonSegment(value: PreviewDevice.mobile, label: Text('Mobile')),
+                    ButtonSegment(value: PreviewDevice.tablet, label: Text('Tablet')),
+                    ButtonSegment(value: PreviewDevice.desktop, label: Text('Desktop')),
                   ],
-                  selected: {page.backgroundType},
-                  onSelectionChanged: (selection) {
-                    setState(() => _pages[_currentPage] = page.copyWith(backgroundType: selection.first));
-                  },
+                  onSelectionChanged: (s) => setState(() => _previewDevice = s.first),
                 ),
-                if (page.backgroundType == WishBackgroundType.solid) ...[
-                  ListTile(
-                    title: const Text('Pick color'),
-                    trailing: CircleAvatar(backgroundColor: _hexToColor(page.solidColor)),
-                    onTap: () => _setColorOnPage(isGradientStart: false, isSolid: true),
-                  ),
-                ],
-                if (page.backgroundType == WishBackgroundType.gradient) ...[
-                  ListTile(
-                    title: const Text('Gradient start'),
-                    trailing: CircleAvatar(backgroundColor: _hexToColor(page.gradientStart)),
-                    onTap: () => _setColorOnPage(isGradientStart: true, isSolid: false),
-                  ),
-                  ListTile(
-                    title: const Text('Gradient end'),
-                    trailing: CircleAvatar(backgroundColor: _hexToColor(page.gradientEnd)),
-                    onTap: () => _setColorOnPage(isGradientStart: false, isSolid: false),
-                  ),
-                ],
-                if (page.backgroundType == WishBackgroundType.image)
-                  ListTile(
-                    title: const Text('Choose background image'),
-                    trailing: const Icon(Icons.image_outlined),
-                    onTap: () async {
-                      final image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
-                      if (image == null) return;
-                      setState(() {
-                        _picked.add(image);
-                        _pages[_currentPage] = page.copyWith(backgroundImageUrl: image.path);
-                      });
-                    },
-                  ),
-                if (page.backgroundType == WishBackgroundType.video) ...[
-                  ListTile(
-                    title: const Text('Choose background video (premium)'),
-                    trailing: const Icon(Icons.movie_creation_outlined),
-                    onTap: _pickVideoForBackground,
-                  ),
-                  const ListTile(
-                    leading: Icon(Icons.workspace_premium_outlined),
-                    title: Text('Suggestion: Charge extra for video rendering + hosting costs.'),
-                  ),
-                ],
               ],
             ),
             ExpansionTile(
-              title: const Text('Step 3: Add Components'),
+              title: const Text('2) Background & finish'),
+              subtitle: const Text('HSB color picker + gradient + metallic/matte'),
               initiallyExpanded: true,
-              subtitle: const Text('Texts, images, and interactive buttons'),
               children: [
-                TextField(
-                  controller: _componentTextController,
-                  decoration: const InputDecoration(labelText: 'Text component content'),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('Solid'),
+                      selected: _page.backgroundType == WishBackgroundType.solid,
+                      onSelected: (_) => setState(() => _pages[_currentPage] = _page.copyWith(backgroundType: WishBackgroundType.solid)),
+                    ),
+                    ChoiceChip(
+                      label: const Text('Gradient'),
+                      selected: _page.backgroundType == WishBackgroundType.gradient,
+                      onSelected: (_) => setState(() => _pages[_currentPage] = _page.copyWith(backgroundType: WishBackgroundType.gradient)),
+                    ),
+                    ChoiceChip(
+                      label: const Text('Image'),
+                      selected: _page.backgroundType == WishBackgroundType.image,
+                      onSelected: (_) => _pickBackgroundAsset(video: false),
+                    ),
+                    ChoiceChip(
+                      label: const Text('Video 💎'),
+                      selected: _page.backgroundType == WishBackgroundType.video,
+                      onSelected: (_) => _pickBackgroundAsset(video: true),
+                    ),
+                  ],
                 ),
+                ListTile(
+                  title: const Text('Pick solid color (HSB)'),
+                  trailing: CircleAvatar(backgroundColor: _hexColor(_page.solidColor)),
+                  onTap: () => _chooseColor(start: false, solid: true),
+                ),
+                ListTile(
+                  title: const Text('Pick gradient start (HSB)'),
+                  trailing: CircleAvatar(backgroundColor: _hexColor(_page.gradientStart)),
+                  onTap: () => _chooseColor(start: true, solid: false),
+                ),
+                ListTile(
+                  title: const Text('Pick gradient end (HSB)'),
+                  trailing: CircleAvatar(backgroundColor: _hexColor(_page.gradientEnd)),
+                  onTap: () => _chooseColor(start: false, solid: false),
+                ),
+                SegmentedButton<FinishType>(
+                  selected: {_page.finish},
+                  onSelectionChanged: (s) => setState(() => _pages[_currentPage] = _page.copyWith(finish: s.first)),
+                  segments: const [
+                    ButtonSegment(value: FinishType.normal, label: Text('Normal')),
+                    ButtonSegment(value: FinishType.matte, label: Text('Matte')),
+                    ButtonSegment(value: FinishType.metallic, label: Text('Metallic')),
+                  ],
+                ),
+              ],
+            ),
+            ExpansionTile(
+              title: const Text('3) Add components'),
+              subtitle: const Text('Text editable from preview (double tap)'),
+              children: [
+                TextField(controller: _textController, decoration: const InputDecoration(labelText: 'Text value')),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   children: [
-                    OutlinedButton.icon(
-                      onPressed: () => _addComponent(WishComponentType.text),
-                      icon: const Icon(Icons.text_fields),
-                      label: const Text('Add Text'),
-                    ),
-                    OutlinedButton.icon(
+                    OutlinedButton(onPressed: () => _addComponent(WishComponentType.text), child: const Text('Add Text')),
+                    OutlinedButton(
                       onPressed: () async {
-                        await _pickImage();
+                        final img = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+                        if (img != null) setState(() => _picked.add(img));
                         _addComponent(WishComponentType.image);
                       },
-                      icon: const Icon(Icons.image_outlined),
-                      label: const Text('Add Image'),
+                      child: const Text('Add Image'),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: () => _addComponent(WishComponentType.button),
-                      icon: const Icon(Icons.smart_button),
-                      label: const Text('Add Button'),
-                    ),
+                    OutlinedButton(onPressed: () => _addComponent(WishComponentType.button), child: const Text('Add Button')),
                   ],
-                ),
-                const SizedBox(height: 8),
-                const ListTile(
-                  leading: Icon(Icons.tips_and_updates_outlined),
-                  title: Text('Tip: Start from text + one CTA button per page for clarity.'),
                 ),
               ],
             ),
             ExpansionTile(
-              title: const Text('Step 4: Layout & Controls'),
-              subtitle: const Text('Drag selected component. Lock when done.'),
+              title: const Text('4) Page flow'),
               children: [
-                if (_selectedComponentId == null)
-                  const ListTile(title: Text('Select an item from preview to edit controls.')),
-                if (_selectedComponentId != null)
+                FilledButton.icon(onPressed: _addPage, icon: const Icon(Icons.add), label: const Text('Add next page')),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: List.generate(
+                    _pages.length,
+                    (i) => ChoiceChip(
+                      label: Text('Page ${i + 1}'),
+                      selected: _currentPage == i,
+                      onSelected: (_) => setState(() {
+                        _currentPage = i;
+                        _selectedId = null;
+                      }),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            ExpansionTile(
+              title: const Text('5) Selected component settings'),
+              children: [
+                if (_selectedId == null) const ListTile(title: Text('Select a component from preview')), 
+                if (_selectedId != null) ...[
                   Builder(builder: (context) {
-                    final selected = page.components.firstWhere((c) => c.id == _selectedComponentId);
+                    final c = _page.components.firstWhere((x) => x.id == _selectedId);
                     return Column(
                       children: [
-                        TextField(
-                          controller: TextEditingController(text: selected.value),
-                          decoration: const InputDecoration(labelText: 'Selected component label/text'),
-                          onSubmitted: (value) => _updateSelected((c) => c.copyWith(value: value)),
+                        ListTile(
+                          title: Text('Trigger: ${c.revealTrigger.name}'),
+                          subtitle: const Text('Change by re-adding component if needed'),
                         ),
-                        const SizedBox(height: 8),
-                        if (selected.type == WishComponentType.button)
+                        if (c.type == WishComponentType.button)
                           DropdownButtonFormField<ButtonActionType>(
-                            value: selected.actionType,
-                            decoration: const InputDecoration(labelText: 'Button action'),
+                            value: c.actionType,
                             items: ButtonActionType.values
                                 .map((e) => DropdownMenuItem(value: e, child: Text(e.name)))
                                 .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              _updateSelected((c) => c.copyWith(actionType: value));
-                            },
+                            onChanged: (v) => _updateSelected((x) => x.copyWith(actionType: v)),
+                            decoration: const InputDecoration(labelText: 'Button purpose'),
                           ),
                         SwitchListTile.adaptive(
-                          title: const Text('Lock selected component'),
-                          value: selected.locked,
-                          onChanged: (v) => _updateSelected((c) => c.copyWith(locked: v)),
+                          title: const Text('Lock selected'),
+                          value: c.locked,
+                          onChanged: (v) => _updateSelected((x) => x.copyWith(locked: v)),
                         ),
                       ],
                     );
                   }),
+                ]
               ],
             ),
-            ExpansionTile(
-              title: const Text('Step 5: Interactions & Pricing'),
-              subtitle: const Text('Rename actions and configure premium gestures'),
-              children: [
-                SwitchListTile.adaptive(
-                  title: const Text('Tap interaction (Free)'),
-                  value: _tapEnabled,
-                  onChanged: (v) => setState(() => _tapEnabled = v),
-                ),
-                TextField(controller: _interactionTapController, decoration: const InputDecoration(labelText: 'Tap label')),
-                SwitchListTile.adaptive(
-                  title: const Text('Swipe interaction (Premium)'),
-                  value: _swipeEnabled,
-                  onChanged: (v) => setState(() => _swipeEnabled = v),
-                ),
-                TextField(controller: _interactionSwipeController, decoration: const InputDecoration(labelText: 'Swipe label')),
-                SwitchListTile.adaptive(
-                  title: const Text('Hold interaction (Premium)'),
-                  value: _holdEnabled,
-                  onChanged: (v) => setState(() => _holdEnabled = v),
-                ),
-                TextField(controller: _interactionHoldController, decoration: const InputDecoration(labelText: 'Hold label')),
-                SwitchListTile.adaptive(
-                  title: const Text('Shake interaction (Premium)'),
-                  value: _shakeEnabled,
-                  onChanged: (v) => setState(() => _shakeEnabled = v),
-                ),
-                TextField(controller: _interactionShakeController, decoration: const InputDecoration(labelText: 'Shake label')),
-              ],
+            const SizedBox(height: 8),
+            DropdownButtonFormField<AnimationType>(
+              value: _animationType,
+              items: AnimationType.values.map((e) => DropdownMenuItem(value: e, child: Text(e.name))).toList(),
+              onChanged: (v) => setState(() => _animationType = v!),
+              decoration: const InputDecoration(labelText: 'Transition'),
             ),
-            ExpansionTile(
-              title: const Text('Step 6: Publish'),
-              subtitle: const Text('Animation + validation + create link'),
-              children: [
-                DropdownButtonFormField<AnimationType>(
-                  value: _animationType,
-                  decoration: const InputDecoration(labelText: 'Transition animation'),
-                  items: AnimationType.values
-                      .map((t) => DropdownMenuItem(value: t, child: Text(t.name)))
-                      .toList(),
-                  onChanged: (value) => setState(() => _animationType = value!),
-                ),
-                const SizedBox(height: 10),
-                FilledButton.icon(
-                  onPressed: _saving ? null : _saveWish,
-                  icon: const Icon(Icons.publish_outlined),
-                  label: Text(_saving ? 'Creating...' : 'Create Wish'),
-                ),
-              ],
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              onPressed: _saving ? null : _saveWish,
+              icon: const Icon(Icons.publish),
+              label: Text(_saving ? 'Creating...' : 'Create Wish'),
             ),
           ],
         ),
@@ -558,11 +526,11 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  Widget _buildPreviewPanel(WishPageModel page, double maxWidth, bool isMobile) {
-    final frameWidth = switch (_previewDevice) {
-      PreviewDevice.phone => 360.0,
-      PreviewDevice.tablet => 600.0,
-      PreviewDevice.desktop => 900.0,
+  Widget _previewCard() {
+    final frame = switch (_previewDevice) {
+      PreviewDevice.mobile => const Size(360, 640),
+      PreviewDevice.tablet => const Size(600, 960),
+      PreviewDevice.desktop => const Size(900, 560),
     };
 
     return Padding(
@@ -570,199 +538,204 @@ class _EditorScreenState extends State<EditorScreen> {
       child: Card(
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Column(
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Live preview'),
-                  SegmentedButton<PreviewDevice>(
-                    selected: {_previewDevice},
-                    onSelectionChanged: (s) => setState(() => _previewDevice = s.first),
-                    segments: const [
-                      ButtonSegment(value: PreviewDevice.phone, icon: Icon(Icons.phone_android)),
-                      ButtonSegment(value: PreviewDevice.tablet, icon: Icon(Icons.tablet_mac)),
-                      ButtonSegment(value: PreviewDevice.desktop, icon: Icon(Icons.desktop_windows)),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: Center(
-                  child: FittedBox(
-                    fit: BoxFit.contain,
-                    child: Container(
-                      width: (frameWidth.clamp(320, isMobile ? maxWidth - 40 : maxWidth)).toDouble(),
-                      height: frameWidth * 16 / 9,
-                      color: Colors.black,
-                      child: Center(
-                        child: _EditorCanvas(
-                          page: page,
-                          selectedComponentId: _selectedComponentId,
-                          onSelect: (id) => setState(() => _selectedComponentId = id),
-                          onDrag: (id, delta) {
-                            final component = page.components.firstWhere((c) => c.id == id);
-                            if (component.locked) return;
-                            _updateSelected((c) => c.copyWith(
-                                  x: (c.x + delta.dx).clamp(0, 300),
-                                  y: (c.y + delta.dy).clamp(0, 580),
-                                ));
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                width: frame.width,
+                height: frame.height,
+                child: _EditorCanvas(
+                  page: _page,
+                  selectedId: _selectedId,
+                  onTap: (id) => setState(() => _selectedId = id),
+                  onDoubleTap: _editTextOnCanvas,
+                  onDrag: (id, delta) {
+                    final c = _page.components.firstWhere((e) => e.id == id);
+                    if (c.locked) return;
+                    _selectedId = id;
+                    _updateSelected((x) => x.copyWith(
+                          x: (x.x + delta.dx).clamp(0, math.max(0, frame.width - x.width - 8)),
+                          y: (x.y + delta.dy).clamp(0, math.max(0, frame.height - x.height - 8)),
+                        ));
+                  },
                 ),
               ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Color _hexToColor(String hex) {
-    final value = hex.replaceAll('#', '');
-    return Color(int.parse('0xFF$value'));
-  }
-
-  String _toHex(Color color) {
-    return '#${color.value.toRadixString(16).padLeft(8, '0').substring(2)}'.toUpperCase();
-  }
+  Color _hexColor(String hex) => Color(int.parse('0xFF${hex.replaceAll('#', '')}'));
+  String _toHex(Color c) => '#${c.value.toRadixString(16).padLeft(8, '0').substring(2)}'.toUpperCase();
 }
 
 class _EditorCanvas extends StatelessWidget {
   const _EditorCanvas({
     required this.page,
-    required this.selectedComponentId,
-    required this.onSelect,
+    required this.selectedId,
+    required this.onTap,
+    required this.onDoubleTap,
     required this.onDrag,
   });
 
   final WishPageModel page;
-  final String? selectedComponentId;
-  final ValueChanged<String> onSelect;
-  final void Function(String id, Offset delta) onDrag;
+  final String? selectedId;
+  final ValueChanged<String> onTap;
+  final ValueChanged<WishComponentModel> onDoubleTap;
+  final void Function(String, Offset) onDrag;
 
   @override
   Widget build(BuildContext context) {
-    final background = switch (page.backgroundType) {
-      WishBackgroundType.solid => ColoredBox(color: _hex(page.solidColor)),
-      WishBackgroundType.gradient => DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(colors: [_hex(page.gradientStart), _hex(page.gradientEnd)]),
-          ),
-        ),
-      WishBackgroundType.image => page.backgroundImageUrl == null
-          ? const ColoredBox(color: Colors.black12)
-          : Image.network(
-              page.backgroundImageUrl!,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => const ColoredBox(color: Colors.black12),
-            ),
-      WishBackgroundType.video => Stack(
-          children: [
-            const ColoredBox(color: Colors.black26),
-            Center(
-              child: Icon(Icons.play_circle_fill_rounded, color: Colors.white70, size: 90),
-            ),
-            const Positioned(
-              bottom: 10,
-              left: 10,
-              child: Text('Video background (premium)', style: TextStyle(color: Colors.white70)),
-            ),
-          ],
-        ),
-    };
-
-    return SizedBox(
-      width: 360,
-      height: 640,
-      child: Stack(
-        children: [
-          Positioned.fill(child: background),
-          Positioned.fill(child: ColoredBox(color: Colors.black.withOpacity(0.2))),
-          ...page.components.map((component) {
-            return Positioned(
-              left: component.x,
-              top: component.y,
-              child: GestureDetector(
-                onTap: () => onSelect(component.id),
-                onPanUpdate: (d) {
-                  if (selectedComponentId == component.id) {
-                    onDrag(component.id, d.delta);
-                  }
-                },
-                child: Container(
-                  width: component.width,
-                  height: component.height,
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.35),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: selectedComponentId == component.id ? Colors.amber : Colors.white38,
-                      width: selectedComponentId == component.id ? 2 : 1,
-                    ),
+    return Stack(
+      children: [
+        Positioned.fill(child: _background(page)),
+        Positioned.fill(child: _finishOverlay(page.finish)),
+        ...page.components.map((c) {
+          return Positioned(
+            left: c.x,
+            top: c.y,
+            child: GestureDetector(
+              onTap: () => onTap(c.id),
+              onDoubleTap: () => onDoubleTap(c),
+              onPanUpdate: (d) => onDrag(c.id, d.delta),
+              child: Container(
+                width: c.width,
+                height: c.height,
+                alignment: Alignment.center,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.28),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: selectedId == c.id ? Colors.amber : Colors.white38,
+                    width: selectedId == c.id ? 2 : 1,
                   ),
-                  child: _component(component),
                 ),
+                child: _component(c),
               ),
-            );
-          }),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _component(WishComponentModel c) {
+    switch (c.type) {
+      case WishComponentType.text:
+        return Text(c.value, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700));
+      case WishComponentType.image:
+        return c.value.startsWith('http') ? Image.network(c.value, fit: BoxFit.cover) : const Icon(Icons.image);
+      case WishComponentType.button:
+        final icon = switch (c.revealTrigger) {
+          RevealTrigger.tap => Icons.touch_app,
+          RevealTrigger.hold => Icons.pan_tool_alt,
+          RevealTrigger.swipe => Icons.swipe,
+          RevealTrigger.shake => Icons.vibration,
+          RevealTrigger.none => Icons.smart_button,
+        };
+        return FilledButton.icon(onPressed: () {}, icon: Icon(icon, size: 16), label: Text(c.value));
+    }
+  }
+
+  Widget _background(WishPageModel page) {
+    switch (page.backgroundType) {
+      case WishBackgroundType.solid:
+        return ColoredBox(color: Color(int.parse('0xFF${page.solidColor.replaceAll('#', '')}')));
+      case WishBackgroundType.gradient:
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Color(int.parse('0xFF${page.gradientStart.replaceAll('#', '')}')),
+                Color(int.parse('0xFF${page.gradientEnd.replaceAll('#', '')}')),
+              ],
+            ),
+          ),
+        );
+      case WishBackgroundType.image:
+        return page.backgroundImageUrl == null
+            ? const ColoredBox(color: Colors.black12)
+            : Image.network(page.backgroundImageUrl!, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const ColoredBox(color: Colors.black12));
+      case WishBackgroundType.video:
+        return Stack(children: const [
+          Positioned.fill(child: ColoredBox(color: Colors.black45)),
+          Center(child: Icon(Icons.play_circle_fill, size: 90, color: Colors.white70)),
+        ]);
+    }
+  }
+
+  Widget _finishOverlay(FinishType finish) {
+    switch (finish) {
+      case FinishType.normal:
+        return const SizedBox.shrink();
+      case FinishType.matte:
+        return ColoredBox(color: Colors.black.withOpacity(0.18));
+      case FinishType.metallic:
+        return IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Colors.white.withOpacity(0.15), Colors.transparent, Colors.white.withOpacity(0.08)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+          ),
+        );
+    }
+  }
+}
+
+class _HsbPicker extends StatefulWidget {
+  const _HsbPicker({required this.initial});
+  final Color initial;
+
+  @override
+  State<_HsbPicker> createState() => _HsbPickerState();
+}
+
+class _HsbPickerState extends State<_HsbPicker> {
+  late HSVColor _hsv;
+
+  @override
+  void initState() {
+    super.initState();
+    _hsv = HSVColor.fromColor(widget.initial);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _hsv.toColor();
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom + 20, left: 16, right: 16, top: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('HSB Color Picker', style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          Container(height: 48, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(10))),
+          const SizedBox(height: 12),
+          _slider('Hue', _hsv.hue, 360, (v) => setState(() => _hsv = _hsv.withHue(v))),
+          _slider('Saturation', _hsv.saturation * 100, 100, (v) => setState(() => _hsv = _hsv.withSaturation(v / 100))),
+          _slider('Brightness', _hsv.value * 100, 100, (v) => setState(() => _hsv = _hsv.withValue(v / 100))),
+          const SizedBox(height: 8),
+          FilledButton(onPressed: () => Navigator.pop(context, color), child: const Text('Use color')),
         ],
       ),
     );
   }
 
-  Widget _component(WishComponentModel component) {
-    switch (component.type) {
-      case WishComponentType.text:
-        return Text(component.value, maxLines: 3, overflow: TextOverflow.ellipsis);
-      case WishComponentType.image:
-        if (component.value.startsWith('http')) {
-          return Image.network(component.value, fit: BoxFit.cover);
-        }
-        return const Center(child: Icon(Icons.image));
-      case WishComponentType.button:
-        return Center(child: FilledButton(onPressed: () {}, child: Text(component.value)));
-    }
-  }
-
-  Color _hex(String hex) {
-    final value = hex.replaceAll('#', '');
-    return Color(int.parse('0xFF$value'));
-  }
-}
-
-class _ColorPickerSheet extends StatelessWidget {
-  const _ColorPickerSheet({required this.initial});
-
-  final Color initial;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: GridView.count(
-        crossAxisCount: 4,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        children: _palette
-            .map(
-              (color) => GestureDetector(
-                onTap: () => Navigator.pop(context, color),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            )
-            .toList(),
-      ),
+  Widget _slider(String label, double value, double max, ValueChanged<double> onChanged) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$label: ${value.toStringAsFixed(0)}'),
+        Slider(value: value, max: max, onChanged: onChanged),
+      ],
     );
   }
 }

@@ -27,6 +27,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   InteractionHandler? _interaction;
   int _index = 0;
   bool _holdReveal = false;
+  bool _swipeReveal = false;
+  bool _tapReveal = false;
+  bool _shakeReveal = false;
 
   @override
   void initState() {
@@ -39,11 +42,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _loadWish() async {
     final wish = await _repository.getWish(widget.wishId);
     _interaction = InteractionHandler(
-      onTap: _next,
-      onSwipeLeft: _next,
-      onSwipeRight: _previous,
+      onTap: () {
+        setState(() => _tapReveal = true);
+      },
+      onSwipeLeft: () {
+        setState(() => _swipeReveal = true);
+        _next();
+      },
+      onSwipeRight: () {
+        setState(() => _swipeReveal = true);
+        _previous();
+      },
       onLongPress: () => setState(() => _holdReveal = true),
-      onShake: _confetti.play,
+      onShake: () {
+        _confetti.play();
+        setState(() => _shakeReveal = true);
+      },
     )..startShakeListening();
 
     if (mounted) setState(() => _wish = wish);
@@ -59,11 +73,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _next() {
     final wish = _wish;
     if (wish == null) return;
-    final total = wish.pages.isNotEmpty ? wish.pages.length : wish.messages.length;
-    if (_index < total - 1) {
+    if (_index < wish.pages.length - 1) {
       setState(() {
         _index++;
-        _holdReveal = false;
+        _resetRevealStates();
       });
     }
   }
@@ -72,12 +85,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (_index > 0) {
       setState(() {
         _index--;
-        _holdReveal = false;
+        _resetRevealStates();
       });
     }
   }
 
-  void _performButtonAction(ButtonActionType action) {
+  void _resetRevealStates() {
+    _holdReveal = false;
+    _swipeReveal = false;
+    _tapReveal = false;
+    _shakeReveal = false;
+  }
+
+  void _runButton(ButtonActionType action) {
     switch (action) {
       case ButtonActionType.nextPage:
         _next();
@@ -86,7 +106,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _previous();
         break;
       case ButtonActionType.toggleReveal:
-        setState(() => _holdReveal = !_holdReveal);
+        setState(() => _tapReveal = !_tapReveal);
         break;
     }
   }
@@ -95,119 +115,79 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Widget build(BuildContext context) {
     final wish = _wish;
     if (wish == null) {
-      return const AdaptiveScaffold(
-        title: 'Loading Wish',
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const AdaptiveScaffold(title: 'Loading Wish', body: Center(child: CircularProgressIndicator()));
     }
+
+    if (wish.pages.isEmpty) {
+      return const AdaptiveScaffold(title: 'Wish Experience', body: Center(child: Text('No pages to display')));
+    }
+    final page = wish.pages[_index.clamp(0, wish.pages.length - 1)];
 
     return AdaptiveScaffold(
       title: 'Wish Experience',
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          return Stack(
-            children: [
-              Center(
-                child: AspectRatio(
-                  aspectRatio: 9 / 16,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 400, maxHeight: 710),
-                    child: GestureDetector(
-                      onTap: wish.interactionConfig.tapEnabled ? _interaction?.onTap : null,
-                      onLongPress: wish.interactionConfig.holdEnabled ? _interaction?.onLongPress : null,
-                      onHorizontalDragEnd: (details) {
-                        if (!wish.interactionConfig.swipeEnabled) return;
-                        if (details.velocity.pixelsPerSecond.dx < 0) {
-                          _interaction?.onSwipeLeft?.call();
-                        } else {
-                          _interaction?.onSwipeRight?.call();
-                        }
-                      },
-                      child: StoryTransition(
-                        animationType: wish.animationType,
-                        child: _buildPage(wish),
-                      ),
-                    ),
-                  ),
+      body: Stack(
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: 9 / 16,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 390, maxHeight: 700),
+                child: GestureDetector(
+                  onTap: _interaction?.onTap,
+                  onLongPress: _interaction?.onLongPress,
+                  onHorizontalDragEnd: (details) {
+                    if (details.velocity.pixelsPerSecond.dx < 0) {
+                      _interaction?.onSwipeLeft?.call();
+                    } else {
+                      _interaction?.onSwipeRight?.call();
+                    }
+                  },
+                  child: StoryTransition(animationType: wish.animationType, child: _buildPage(page)),
                 ),
               ),
-              Positioned(
-                left: 12,
-                top: 12,
-                child: Wrap(
-                  spacing: 8,
-                  children: [
-                    _HintChip(text: wish.interactionConfig.tapLabel, enabled: wish.interactionConfig.tapEnabled),
-                    _HintChip(
-                      text: wish.interactionConfig.swipeLabel,
-                      enabled: wish.interactionConfig.swipeEnabled,
-                    ),
-                    _HintChip(text: wish.interactionConfig.holdLabel, enabled: wish.interactionConfig.holdEnabled),
-                    _HintChip(
-                      text: wish.interactionConfig.shakeLabel,
-                      enabled: wish.interactionConfig.shakeEnabled,
-                    ),
-                  ],
-                ),
+            ),
+          ),
+          ConfettiWidget(confettiController: _confetti, blastDirectionality: BlastDirectionality.explosive),
+          if (!wish.isPremium)
+            Positioned(
+              right: 12,
+              bottom: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: Colors.black.withOpacity(0.45), borderRadius: BorderRadius.circular(8)),
+                child: const Text('Created with Wisheyy'),
               ),
-              ConfettiWidget(
-                confettiController: _confetti,
-                blastDirectionality: BlastDirectionality.explosive,
-              ),
-              if (!wish.isPremium)
-                Positioned(
-                  right: 12,
-                  bottom: 12,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.4),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Text('Created with Wisheyy'),
-                  ),
-                ),
-            ],
-          );
-        },
+            ),
+        ],
       ),
     );
   }
 
-  Widget _buildPage(WishModel wish) {
-    if (wish.pages.isEmpty) {
-      return const ColoredBox(color: Colors.black);
-    }
-    final page = wish.pages[_index.clamp(0, wish.pages.length - 1)];
-    final showText = !wish.interactionConfig.holdEnabled || _holdReveal;
-
+  Widget _buildPage(WishPageModel page) {
     return Stack(
       fit: StackFit.expand,
       children: [
         _background(page),
-        Positioned.fill(child: ColoredBox(color: Colors.black.withOpacity(0.2))),
-        ...page.components.map((component) {
+        _finishOverlay(page.finish),
+        ...page.components.map((c) {
+          final visible = _isVisible(c);
+          if (!visible) return const SizedBox.shrink();
           return Positioned(
-            left: component.x,
-            top: component.y,
+            left: c.x,
+            top: c.y,
             child: SizedBox(
-              width: component.width,
-              height: component.height,
-              child: switch (component.type) {
-                WishComponentType.text => AnimatedOpacity(
-                    opacity: showText ? 1 : 0,
-                    duration: const Duration(milliseconds: 280),
-                    child: Text(
-                      showText ? component.value : 'Hold to reveal…',
-                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
-                    ),
+              width: c.width,
+              height: c.height,
+              child: switch (c.type) {
+                WishComponentType.text => Text(
+                    c.value,
+                    style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
                   ),
-                WishComponentType.image => component.value.startsWith('http')
-                    ? Image.network(component.value, fit: BoxFit.cover)
-                    : const SizedBox.shrink(),
-                WishComponentType.button => FilledButton(
-                    onPressed: () => _performButtonAction(component.actionType),
-                    child: Text(component.value),
+                WishComponentType.image => c.value.startsWith('http') ? Image.network(c.value, fit: BoxFit.cover) : const SizedBox.shrink(),
+                WishComponentType.button => FilledButton.icon(
+                    onPressed: () => _runButton(c.actionType),
+                    icon: Icon(_triggerIcon(c.revealTrigger), size: 16),
+                    label: Text(c.value),
                   ),
               },
             ),
@@ -215,112 +195,77 @@ class _PlayerScreenState extends State<PlayerScreen> {
         }),
       ],
     );
+  }
+
+  bool _isVisible(WishComponentModel c) {
+    switch (c.revealTrigger) {
+      case RevealTrigger.none:
+        return true;
+      case RevealTrigger.tap:
+        return _tapReveal;
+      case RevealTrigger.hold:
+        return _holdReveal;
+      case RevealTrigger.swipe:
+        return _swipeReveal;
+      case RevealTrigger.shake:
+        return _shakeReveal;
+    }
+  }
+
+  IconData _triggerIcon(RevealTrigger t) {
+    switch (t) {
+      case RevealTrigger.none:
+        return Icons.smart_button;
+      case RevealTrigger.tap:
+        return Icons.touch_app;
+      case RevealTrigger.hold:
+        return Icons.pan_tool_alt;
+      case RevealTrigger.swipe:
+        return Icons.swipe;
+      case RevealTrigger.shake:
+        return Icons.vibration;
+    }
   }
 
   Widget _background(WishPageModel page) {
     switch (page.backgroundType) {
       case WishBackgroundType.solid:
-        return ColoredBox(color: _toColor(page.solidColor));
+        return ColoredBox(color: _hex(page.solidColor));
       case WishBackgroundType.gradient:
         return DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [_toColor(page.gradientStart), _toColor(page.gradientEnd)],
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-            ),
-          ),
+          decoration: BoxDecoration(gradient: LinearGradient(colors: [_hex(page.gradientStart), _hex(page.gradientEnd)])),
         );
       case WishBackgroundType.image:
-        if (page.backgroundImageUrl == null) return const SizedBox.shrink();
+        if (page.backgroundImageUrl == null) return const ColoredBox(color: Colors.black12);
         return Image.network(page.backgroundImageUrl!, fit: BoxFit.cover);
       case WishBackgroundType.video:
-        return Stack(
-          fit: StackFit.expand,
+        return const Stack(
           children: [
-            const ColoredBox(color: Colors.black45),
-            Center(
-              child: Icon(Icons.play_circle_fill_rounded, size: 86, color: Colors.white.withOpacity(0.85)),
-            ),
-            const Positioned(
-              bottom: 14,
-              left: 14,
-              child: Text('Video background (premium)', style: TextStyle(color: Colors.white70)),
-            ),
+            Positioned.fill(child: ColoredBox(color: Colors.black38)),
+            Center(child: Icon(Icons.play_circle_fill_rounded, size: 90, color: Colors.white70)),
           ],
         );
     }
   }
 
-  Color _toColor(String hex) {
-    final cleaned = hex.replaceAll('#', '');
-    return Color(int.parse('0xFF$cleaned'));
-  }
-}
-
-class _HintChip extends StatelessWidget {
-  const _HintChip({required this.text, required this.enabled});
-
-  final String text;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    return Opacity(
-      opacity: enabled ? 0.95 : 0.45,
-      child: Chip(label: Text(text, style: const TextStyle(fontSize: 12))),
-    );
-  }
-
-  Widget _buildPageSlide(WishPageModel page, WishModel wish) {
-    final start = _parseHex(page.gradientStart, fallback: const Color(0xFF6E56F8));
-    final end = _parseHex(page.gradientEnd, fallback: Colors.black);
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: page.backgroundType == WishBackgroundType.gradient
-                ? LinearGradient(colors: [start, end], begin: Alignment.topCenter, end: Alignment.bottomCenter)
-                : null,
-          ),
-          child: const SizedBox.expand(),
-        ),
-        if (page.backgroundType == WishBackgroundType.image && page.backgroundImageUrl != null)
-          Image.network(page.backgroundImageUrl!, fit: BoxFit.cover),
-        Container(color: Colors.black.withOpacity(0.25)),
-        ...page.components.map((component) {
-          final showText = !wish.interactionConfig.holdEnabled || _holdReveal;
-          return Positioned(
-            left: component.x,
-            top: component.y,
-            child: SizedBox(
-              width: component.width,
-              height: component.height,
-              child: switch (component.type) {
-                WishComponentType.text => AnimatedOpacity(
-                    opacity: showText ? 1 : 0,
-                    duration: const Duration(milliseconds: 300),
-                    child: Text(
-                      showText ? component.value : 'Hold to reveal…',
-                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white),
-                    ),
-                  ),
-                WishComponentType.image => component.value.startsWith('http')
-                    ? Image.network(component.value, fit: BoxFit.cover)
-                    : const SizedBox.shrink(),
-                WishComponentType.button => FilledButton(onPressed: () {}, child: Text(component.value)),
-              },
+  Widget _finishOverlay(FinishType finish) {
+    switch (finish) {
+      case FinishType.normal:
+        return const SizedBox.shrink();
+      case FinishType.matte:
+        return ColoredBox(color: Colors.black.withOpacity(0.16));
+      case FinishType.metallic:
+        return IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Colors.white.withOpacity(0.14), Colors.transparent, Colors.white.withOpacity(0.08)],
+              ),
             ),
-          );
-        }),
-      ],
-    );
+          ),
+        );
+    }
   }
 
-  Color _parseHex(String hex, {Color fallback = Colors.white}) {
-    final raw = hex.replaceAll('#', '').trim();
-    if (raw.length != 6) return fallback;
-    return Color(int.parse('0xFF$raw'));
-  }
+  Color _hex(String value) => Color(int.parse('0xFF${value.replaceAll('#', '')}'));
 }
